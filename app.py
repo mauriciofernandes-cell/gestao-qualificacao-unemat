@@ -40,11 +40,12 @@ st.markdown("""
 DB_NAME = "qualificacao_unemat.db"
 
 def init_db(force_recreate=False):
-    conn = sqlite3.connect(DB_NAME)
+    conn = sqlite3.connect(DB_NAME, timeout=20)
     cursor = conn.cursor()
     
     if force_recreate:
         cursor.execute("DROP TABLE IF EXISTS servidores")
+        cursor.execute("DROP TABLE IF EXISTS usuarios")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS servidores (
@@ -59,6 +60,12 @@ def init_db(force_recreate=False):
             status TEXT
         )
     """)
+    
+    # Verifica e migra a tabela de usuários se a estrutura estiver desatualizada
+    try:
+        cursor.execute("SELECT id, usuario, senha FROM usuarios LIMIT 1")
+    except sqlite3.OperationalError:
+        cursor.execute("DROP TABLE IF EXISTS usuarios")
     
     cursor.execute("""
         CREATE TABLE IF NOT EXISTS usuarios (
@@ -199,7 +206,7 @@ if not st.session_state['logged_in']:
                     st.success("Acesso concedido com sucesso!")
                     st.rerun()
                 else:
-                    conn = sqlite3.connect(DB_NAME)
+                    conn = sqlite3.connect(DB_NAME, timeout=20)
                     cursor = conn.cursor()
                     cursor.execute("SELECT * FROM usuarios WHERE LOWER(usuario)=? AND senha=?", (u_clean, s_clean))
                     user = cursor.fetchone()
@@ -229,7 +236,7 @@ else:
     # ---------------- DASHBOARD UNIFICADO ----------------
     if opcao == "Dashboard Unificado":
         st.subheader("📊 Painel Geral de Acompanhamento (Docentes & Técnicos)")
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(DB_NAME, timeout=20)
         df = pd.read_sql_query("SELECT * FROM servidores", conn)
         conn.close()
         
@@ -382,10 +389,9 @@ else:
             st.info(f"**{len(uploaded_files)}** arquivo(s) selecionado(s) para importação.")
             
             if st.button("🚀 Confirmar e Importar Registros", type="primary"):
-                # Garante recriação da tabela sem restrição UNIQUE
                 init_db(force_recreate=limpar_base)
                 
-                conn = sqlite3.connect(DB_NAME)
+                conn = sqlite3.connect(DB_NAME, timeout=20)
                 cursor = conn.cursor()
                 
                 relatorio_importacao = []
@@ -458,7 +464,7 @@ else:
             
             if btn_salvar:
                 if matricula and nome:
-                    conn = sqlite3.connect(DB_NAME)
+                    conn = sqlite3.connect(DB_NAME, timeout=20)
                     cursor = conn.cursor()
                     cursor.execute("""
                         INSERT INTO servidores (matricula, nome, tipo_servidor, curso, nivel, data_inicio, data_previsao_termino, status)
@@ -473,7 +479,7 @@ else:
     # ---------------- GERENCIAR REGISTROS ----------------
     elif opcao == "📋 Gerenciar Registros":
         st.subheader("📋 Gerenciamento Unificado de Registros")
-        conn = sqlite3.connect(DB_NAME)
+        conn = sqlite3.connect(DB_NAME, timeout=20)
         df = pd.read_sql_query("SELECT * FROM servidores", conn)
         conn.close()
         
