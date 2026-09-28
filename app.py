@@ -45,12 +45,14 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. Inicialização do Banco de Dados SQLite
+# 3. Inicialização e Correção de Esquema no Banco de Dados SQLite
 DB_NAME = "qualificacao_unemat.db"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
+    
+    # Tabela de servidores
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS servidores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -63,20 +65,34 @@ def init_db():
             status TEXT
         )
     ''')
-    cursor.execute('''
-        CREATE TABLE IF NOT EXISTS usuarios (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            usuario TEXT UNIQUE,
-            senha TEXT
-        )
-    ''')
-    cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, senha) VALUES ('admin', '1234')")
+    
+    # Tabela de usuários com tratamento de erro de compatibilidade
+    try:
+        cursor.execute('''
+            CREATE TABLE IF NOT EXISTS usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT UNIQUE,
+                senha TEXT
+            )
+        ''')
+        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, senha) VALUES ('admin', '1234')")
+    except sqlite3.OperationalError:
+        cursor.execute("DROP TABLE IF EXISTS usuarios")
+        cursor.execute('''
+            CREATE TABLE usuarios (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                usuario TEXT UNIQUE,
+                senha TEXT
+            )
+        ''')
+        cursor.execute("INSERT INTO usuarios (usuario, senha) VALUES ('admin', '1234')")
+        
     conn.commit()
     conn.close()
 
 init_db()
 
-# 4. Estado de sessão para controlo de autenticação
+# 4. Estado de sessão para controle de autenticação
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
@@ -87,7 +103,7 @@ if os.path.exists(logo_path):
     with col_l2:
         st.image(logo_path, use_container_width=True)
 
-# 6. Ecrã de Login
+# 6. Tela de Login
 if not st.session_state['logged_in']:
     st.markdown("<div class='main-header'>Gestão de Qualificação</div>", unsafe_allow_html=True)
     st.markdown("<div class='sub-header'>Acesso Restrito - PRAD / SDP</div>", unsafe_allow_html=True)
@@ -138,7 +154,7 @@ else:
             
             st.dataframe(df, use_container_width=True)
         else:
-            st.info("Nenhum registo cadastrado no momento.")
+            st.info("Nenhum registro cadastrado no momento.")
 
     elif opcao == "Cadastrar Servidor":
         st.subheader("Cadastrar Novo Servidor em Afastamento")
@@ -178,4 +194,4 @@ else:
         if not df.empty:
             st.dataframe(df, use_container_width=True)
         else:
-            st.info("Nenhum registo encontrado.")
+            st.info("Nenhum registro encontrado.")
