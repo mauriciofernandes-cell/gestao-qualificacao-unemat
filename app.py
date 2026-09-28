@@ -84,14 +84,14 @@ def init_db():
 
 init_db()
 
-# Função de Inteligência Reajustada
+# Função de Inteligência com regras de Em Andamento (Em Dia) e Aguardando Comissão (Atrasado)
 def categorizar_status_inteligente(status_val):
     s = str(status_val).lower().strip()
     
     if status_val is None or pd.isna(status_val) or s in ['nan', 'none', '', 'null']:
         return 'Outros / Em Acompanhamento'
     
-    # 1. Pessoas que já estão em desconto em folha ou quitadas
+    # 1. Servidores já em desconto em folha ou quitados
     termos_desconto = [
         'já está descontando', 'ja esta descontando', 'está descontando', 'esta descontando',
         'descontando', 'descontado', 'quitado', 'ressarcido', 'pago'
@@ -100,7 +100,7 @@ def categorizar_status_inteligente(status_val):
         if kw in s:
             return 'Em Desconto / Quitado'
 
-    # 2. Atrasados, devedores ou aguardando comissão
+    # 2. Servidores atrasados, devedores ou aguardando comissão
     termos_atrasado = [
         'atrasad', 'pendent', 'cobranç', 'cobranc', 'notific', 'devedor', 
         'falta', 'devoluç', 'devoluc', 'sem relató', 'sem diploma', 'não entregou', 
@@ -111,7 +111,7 @@ def categorizar_status_inteligente(status_val):
         if kw in s:
             return 'Atrasado / Pendente'
             
-    # 3. Regulares, concluídos ou em andamento
+    # 3. Servidores regulares, concluídos ou em andamento
     termos_concluido = [
         'entregue', 'em dia', 'concluid', 'concluíd', 'finalizad', 'ok', 
         'deferid', 'regular', 'diploma entregue', 'certificado entregue', 
@@ -196,8 +196,9 @@ else:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
                 
-            # Filtro para remover linhas de cabeçalho importadas por engano
-            df = df[~df['nome'].astype(str).str.lower().strip().isin(['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', ''])]
+            # Filtro com correção do método .str.strip()
+            if 'nome' in df.columns:
+                df = df[~df['nome'].astype(str).str.lower().str.strip().isin(['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', ''])]
             
             # Aplicar categorização inteligente de status
             df['Categoria_Status'] = df['status'].apply(categorizar_status_inteligente)
@@ -458,7 +459,8 @@ else:
         if not df.empty:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
-            df = df[~df['nome'].astype(str).str.lower().strip().isin(['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', ''])]
+            if 'nome' in df.columns:
+                df = df[~df['nome'].astype(str).str.lower().str.strip().isin(['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', ''])]
             st.dataframe(df, use_container_width=True)
             
             csv_data = df.to_csv(index=False).encode('utf-8')
