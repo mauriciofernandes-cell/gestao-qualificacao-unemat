@@ -61,7 +61,6 @@ def init_db(force_recreate=False):
         )
     """)
     
-    # Verifica e migra a tabela de usuários se a estrutura estiver desatualizada
     try:
         cursor.execute("SELECT id, usuario, senha FROM usuarios LIMIT 1")
     except sqlite3.OperationalError:
@@ -90,7 +89,7 @@ def init_db(force_recreate=False):
 
 init_db()
 
-# Categorização de status
+# Categorização inteligente de status
 def categorizar_status_inteligente(status_val):
     s = str(status_val).lower().strip()
     if status_val is None or pd.isna(status_val) or s in ['nan', 'none', '']:
@@ -124,53 +123,55 @@ def categorizar_status_inteligente(status_val):
             
     return 'Outros / Em Acompanhamento'
 
-# Função para encontrar a linha do cabeçalho automaticamente e ignorar Unnamed
-def processar_e_extrair_dataframe(df_raw):
+# Função para leitura inteligente de CSV (suporta ponto e vírgula de planilhas brasileiras) ou Excel
+def ler_arquivo_upload(uploaded_file):
+    fname = uploaded_file.name.lower()
+    dict_sheets = {}
+    
+    if fname.endswith('.csv'):
+        try:
+            df = pd.read_csv(uploaded_file, sep=None, engine='python', encoding='utf-8-sig')
+        except Exception:
+            try:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, sep=';', encoding='latin1')
+            except Exception:
+                uploaded_file.seek(0)
+                df = pd.read_csv(uploaded_file, sep=',', encoding='latin1')
+        dict_sheets['Planilha1'] = df
+    else:
+        dict_sheets = pd.read_excel(uploaded_file, sheet_name=None)
+        
+    return dict_sheets
+
+# Função para localizar a linha de cabeçalho real na planilha
+def localizar_cabecalho_e_dados(df_raw):
     header_idx = 0
     found_header = False
     
+    keywords = ['nome', 'servidor', 'docente', 'tecnico', 'técnico', 'interessado', 'matr', 'mat', 'curso', 'programa', 'status', 'situaç', 'situac', 'nivel', 'nível', 'inicio', 'início', 'termino', 'término', 'previs']
+    
     cols_str = " ".join([str(c).lower() for c in df_raw.columns])
-    if sum(1 for k in ['nome', 'servidor', 'matr', 'curso', 'status', 'situaç'] if k in cols_str) >= 2:
+    if sum(1 for k in keywords if k in cols_str) >= 2:
         found_header = True
+        df_data = df_raw.copy()
     else:
         for idx in range(min(15, len(df_raw))):
             row_vals = [str(v).lower().strip() for v in df_raw.iloc[idx].values if pd.notna(v)]
-            matches = sum(1 for k in ['nome', 'servidor', 'matr', 'curso', 'status', 'situaç', 'nivel', 'nível', 'inicio', 'início'] if any(k in cell for cell in row_vals))
+            matches = sum(1 for k in keywords if any(k in cell for cell in row_vals))
             if matches >= 2:
                 header_idx = idx
                 found_header = True
                 break
                 
-    if found_header and header_idx > 0:
-        new_cols = [str(val).strip() if (pd.notna(val) and str(val).strip() != '') else f"col_{i}" for i, val in enumerate(df_raw.iloc[header_idx].values)]
-        df_data = df_raw.iloc[header_idx + 1:].copy()
-        df_data.columns = new_cols
-    else:
-        df_data = df_raw.copy()
-        
-    cols_map = {str(c).lower().strip(): c for c in df_data.columns}
-    
-    c_mat = next((cols_map[k] for k in cols_map if 'matr' in k or 'mat' in k), df_data.columns[0])
-    c_nom = next((cols_map[k] for k in cols_map if 'nome' in k or 'servidor' in k), df_data.columns[min(1, len(df_data.columns)-1)])
-    c_cur = next((cols_map[k] for k in cols_map if 'curso' in k or 'programa' in k), df_data.columns[min(2, len(df_data.columns)-1)])
-    c_niv = next((cols_map[k] for k in cols_map if 'nivel' in k or 'nível' in k), df_data.columns[min(3, len(df_data.columns)-1)])
-    c_ini = next((cols_map[k] for k in cols_map if 'inicio' in k or 'início' in k or 'afast' in k), df_data.columns[min(4, len(df_data.columns)-1)])
-    c_fim = next((cols_map[k] for k in cols_map if 'termino' in k or 'término' in k or 'previs' in k), df_data.columns[min(5, len(df_data.columns)-1)])
-    c_sta = next((cols_map[k] for k in cols_map if 'status' in k or 'situac' in k or 'situaç' in k or 'obs' in k), df_data.columns[min(6, len(df_data.columns)-1)])
-    
-    df_res = pd.DataFrame({
-        'matricula': df_data[c_mat].astype(str).str.strip(),
-        'nome': df_data[c_nom].astype(str).str.strip(),
-        'curso': df_data[c_cur].astype(str).str.strip(),
-        'nivel': df_data[c_niv].astype(str).str.strip(),
-        'data_inicio': df_data[c_ini].astype(str).str.strip(),
-        'data_previsao_termino': df_data[c_fim].astype(str).str.strip(),
-        'status': df_data[c_sta].astype(str).str.strip()
-    })
-    
-    # Remove cabeçalhos duplicados e linhas vazias
-    df_res = df_res[~df_res['nome'].str.lower().isin(['nan', 'none', '', 'nome', 'nome completo', 'servidor', 'nome do servidor'])]
-    return df_res
+        if found_header and header_idx >= 0:
+            new_cols = [str(val).strip() if (pd.notna(val) and str(val).strip() != '') else f"col_{i}" for i, val in enumerate(df_raw.iloc[header_idx].values)]
+            df_data = df_raw.iloc[header_idx + 1:].copy()
+            df_data.columns = new_cols
+        else:
+            df_data = df_raw.copy()
+            
+    return df_data
 
 # 4. Controle de sessão de login
 if 'logged_in' not in st.session_state:
@@ -244,7 +245,7 @@ else:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
                 
-            df = df[~df['nome'].astype(str).str.lower().isin(['nan', 'none', ''])]
+            df = df[~df['nome'].astype(str).str.lower().isin(['nan', 'none', '', 'null'])]
             df['Categoria_Status'] = df['status'].apply(categorizar_status_inteligente)
             
             total_servidores = len(df)
@@ -370,79 +371,120 @@ else:
                 st.dataframe(df_exibicao.drop(columns=['Categoria_Status']), use_container_width=True)
             
         else:
-            st.info("Nenhum registro encontrado. Acesse '📥 Importar Planilhas' para carregar a planilha.")
+            st.info("Nenhum registro encontrado no banco de dados. Acesse '📥 Importar Planilhas' para carregar os dados.")
 
     # ---------------- IMPORTAR PLANILHAS ----------------
     elif opcao == "📥 Importar Planilhas":
         st.subheader("📥 Importação da Planilha Unificada")
-        st.write("Selecione e envie a sua planilha (.xlsx ou .csv). O sistema detectará as colunas e processará todas as abas automaticamente.")
+        st.write("Selecione a sua planilha (.xlsx, .xls ou .csv). O sistema mostrará as colunas identificadas para você confirmar.")
         
-        limpar_base = st.checkbox("⚠️ Recriar tabela e limpar registros anteriores do banco", value=True)
+        limpar_base = st.checkbox("⚠️ Recriar banco de dados e apagar registros anteriores antes de importar", value=True)
         
         uploaded_files = st.file_uploader(
-            "Selecione uma ou mais planilhas (.xlsx, .xls, .csv)", 
+            "Selecione o arquivo da planilha (.xlsx, .xls, .csv)", 
             type=["xlsx", "xls", "csv"], 
             accept_multiple_files=True
         )
         
         if uploaded_files:
-            st.info(f"**{len(uploaded_files)}** arquivo(s) selecionado(s) para importação.")
+            st.success(f"**{len(uploaded_files)}** arquivo(s) selecionado(s).")
             
-            if st.button("🚀 Confirmar e Importar Registros", type="primary"):
-                init_db(force_recreate=limpar_base)
+            for file_idx, f in enumerate(uploaded_files):
+                st.markdown(f"### 📄 Arquivo: `{f.name}`")
                 
-                conn = sqlite3.connect(DB_NAME, timeout=20)
-                cursor = conn.cursor()
+                dict_sheets = ler_arquivo_upload(f)
                 
-                relatorio_importacao = []
-                total_geral = 0
-                
-                for f in uploaded_files:
-                    try:
-                        if f.name.endswith('.csv'):
-                            dict_sheets = {"Sheet1": pd.read_csv(f)}
-                        else:
-                            dict_sheets = pd.read_excel(f, sheet_name=None)
-                            
-                        fname_lower = f.name.lower()
-                        tipo_servidor = "Técnico (PTES)" if ("tecnico" in fname_lower or "ptes" in fname_lower) else "Docente"
+                for sheet_name, df_raw in dict_sheets.items():
+                    if df_raw is None or df_raw.empty:
+                        continue
                         
-                        count_file = 0
-                        for sheet_name, df_sheet in dict_sheets.items():
-                            if df_sheet is None or df_sheet.empty:
-                                continue
-                                
-                            df_limpo = processar_e_extrair_dataframe(df_sheet)
-                            
-                            for _, row in df_limpo.iterrows():
-                                cursor.execute("""
-                                    INSERT INTO servidores (matricula, nome, tipo_servidor, curso, nivel, data_inicio, data_previsao_termino, status)
-                                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-                                """, (
-                                    str(row['matricula']),
-                                    str(row['nome']),
-                                    tipo_servidor,
-                                    str(row['curso']),
-                                    str(row['nivel']),
-                                    str(row['data_inicio']),
-                                    str(row['data_previsao_termino']),
-                                    str(row['status'])
-                                ))
-                                count_file += 1
-                                
-                        total_geral += count_file
-                        relatorio_importacao.append(f"✅ **{f.name}**: {count_file} registros válidos importados com sucesso!")
-                    except Exception as ex:
-                        relatorio_importacao.append(f"❌ **{f.name}**: Erro ao processar ({ex})")
-                
-                conn.commit()
-                conn.close()
-                
-                st.success(f"🎉 Importação Concluída! **{total_geral}** registros foram carregados no banco de dados.")
-                for msg in relatorio_importacao:
-                    st.write(msg)
+                    st.markdown(f"#### Aba: **{sheet_name}** ({len(df_raw)} linhas brutas)")
                     
-                st.info("Acesse a opção 'Dashboard Unificado' no menu lateral para visualizar e filtrar os dados.")
+                    df_data = localizar_cabecalho_e_dados(df_raw)
+                    col_options = [str(c) for c in df_data.columns]
+                    cols_lower = [str(c).lower().strip() for c in col_options]
+                    
+                    # Sugestões automáticas de mapeamento
+                    def sugerir_col(keywords, default_idx):
+                        for kw in keywords:
+                            for idx, col_l in enumerate(cols_lower):
+                                if kw in col_l:
+                                    return col_options[idx]
+                        return col_options[min(default_idx, len(col_options)-1)]
+                    
+                    idx_mat = col_options.index(sugerir_col(['matr', 'mat'], 0))
+                    idx_nom = col_options.index(sugerir_col(['nome', 'servidor', 'docente', 'tecnico', 'interessado', 'pess'], min(1, len(col_options)-1)))
+                    idx_cur = col_options.index(sugerir_col(['curso', 'programa', 'área', 'area'], min(2, len(col_options)-1)))
+                    idx_niv = col_options.index(sugerir_col(['nivel', 'nível', 'grau', 'titul'], min(3, len(col_options)-1)))
+                    idx_ini = col_options.index(sugerir_col(['inicio', 'início', 'afast', 'saida'], min(4, len(col_options)-1)))
+                    idx_fim = col_options.index(sugerir_col(['termino', 'término', 'previs', 'retorno'], min(5, len(col_options)-1)))
+                    idx_sta = col_options.index(sugerir_col(['status', 'situac', 'situaç', 'obs', 'parecer'], min(6, len(col_options)-1)))
+                    
+                    st.write("Confirme ou ajuste o mapeamento das colunas da sua planilha:")
+                    
+                    mc1, mc2, mc3 = st.columns(3)
+                    with mc1:
+                        sel_mat = st.selectbox("Matrícula:", col_options, index=idx_mat, key=f"mat_{file_idx}_{sheet_name}")
+                        sel_nom = st.selectbox("Nome Completo:", col_options, index=idx_nom, key=f"nom_{file_idx}_{sheet_name}")
+                        sel_cur = st.selectbox("Curso / Programa:", col_options, index=idx_cur, key=f"cur_{file_idx}_{sheet_name}")
+                    with mc2:
+                        sel_niv = st.selectbox("Nível (Mestrado/Doutorado):", col_options, index=idx_niv, key=f"niv_{file_idx}_{sheet_name}")
+                        sel_ini = st.selectbox("Data de Início:", col_options, index=idx_ini, key=f"ini_{file_idx}_{sheet_name}")
+                        sel_fim = st.selectbox("Previsão de Término:", col_options, index=idx_fim, key=f"fim_{file_idx}_{sheet_name}")
+                    with mc3:
+                        sel_sta = st.selectbox("Status / Situação / Obs:", col_options, index=idx_sta, key=f"sta_{file_idx}_{sheet_name}")
+                        
+                        fname_lower = f.name.lower()
+                        default_tipo = "Técnico (PTES)" if ("tecnico" in fname_lower or "ptes" in fname_lower) else "Docente"
+                        sel_tipo = st.selectbox("Tipo de Servidor:", ["Docente", "Técnico (PTES)"], index=0 if default_tipo=="Docente" else 1, key=f"tip_{file_idx}_{sheet_name}")
+                    
+                    # Gerar pré-visualização extraída
+                    df_preview = pd.DataFrame({
+                        'matricula': df_data[sel_mat].astype(str).str.strip(),
+                        'nome': df_data[sel_nom].astype(str).str.strip(),
+                        'tipo_servidor': sel_tipo,
+                        'curso': df_data[sel_cur].astype(str).str.strip(),
+                        'nivel': df_data[sel_niv].astype(str).str.strip(),
+                        'data_inicio': df_data[sel_ini].astype(str).str.strip(),
+                        'data_previsao_termino': df_data[sel_fim].astype(str).str.strip(),
+                        'status': df_data[sel_sta].astype(str).str.strip()
+                    })
+                    
+                    # Remover linhas em branco / títulos residuais
+                    df_preview = df_preview[~df_preview['nome'].str.lower().isin(['nan', 'none', '', 'null', 'nome', 'nome completo', 'servidor', 'nome do servidor'])]
+                    
+                    st.info(f"👁️ **Pré-visualização:** {len(df_preview)} registros válidos encontrados nesta aba:")
+                    st.dataframe(df_preview.head(10), use_container_width=True)
+                    
+                    if st.button(f"🚀 Importar {len(df_preview)} Registros para o Banco de Dados", type="primary", key=f"btn_imp_{file_idx}_{sheet_name}"):
+                        init_db(force_recreate=limpar_base)
+                        
+                        conn = sqlite3.connect(DB_NAME, timeout=20)
+                        cursor = conn.cursor()
+                        
+                        inserted_count = 0
+                        for _, row in df_preview.iterrows():
+                            cursor.execute("""
+                                INSERT INTO servidores (matricula, nome, tipo_servidor, curso, nivel, data_inicio, data_previsao_termino, status)
+                                VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(row['matricula']),
+                                str(row['nome']),
+                                str(row['tipo_servidor']),
+                                str(row['curso']),
+                                str(row['nivel']),
+                                str(row['data_inicio']),
+                                str(row['data_previsao_termino']),
+                                str(row['status'])
+                            ))
+                            inserted_count += 1
+                            
+                        conn.commit()
+                        conn.close()
+                        
+                        st.success(f"🎉 Importação efetuada com sucesso! **{inserted_count}** servidores gravados no banco de dados!")
+                        st.info("Redirecionando para o Dashboard...")
+                        st.rerun()
 
     # ---------------- CADASTRAR NOVO SERVIDOR ----------------
     elif opcao == "➕ Cadastrar Servidor":
@@ -486,7 +528,7 @@ else:
         if not df.empty:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
-            df = df[~df['nome'].astype(str).str.lower().isin(['nan', 'none', ''])]
+            df = df[~df['nome'].astype(str).str.lower().isin(['nan', 'none', '', 'null'])]
             st.dataframe(df, use_container_width=True)
             
             csv_data = df.to_csv(index=False).encode('utf-8')
