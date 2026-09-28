@@ -36,19 +36,20 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# 3. Inicialização e Ajuste do Banco de Dados SQLite
+# 3. Inicialização e Ajuste Automático do Banco de Dados SQLite
 DB_NAME = "qualificacao_unemat.db"
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
-    # Tabela de servidores
+    # Tabela de servidores unificada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS servidores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             matricula TEXT,
             nome TEXT,
+            tipo_servidor TEXT DEFAULT 'Docente',
             curso TEXT,
             nivel TEXT,
             data_inicio TEXT,
@@ -56,6 +57,12 @@ def init_db():
             status TEXT
         )
     ''')
+    
+    # Atualização de coluna tipo_servidor caso a tabela tenha sido criada em versão anterior
+    cursor.execute("PRAGMA table_info(servidores)")
+    colunas_existentes = [col[1] for col in cursor.fetchall()]
+    if 'tipo_servidor' not in colunas_existentes:
+        cursor.execute("ALTER TABLE servidores ADD COLUMN tipo_servidor TEXT DEFAULT 'Docente'")
     
     # Tabela de usuários
     cursor.execute('''
@@ -81,19 +88,20 @@ def init_db():
 
 init_db()
 
-# Função auxiliar para categorizar status de forma inteligente
+# Função de Inteligência para categorizar o Status dos Relatórios e Diplomas
 def categorizar_status_inteligente(status_val):
     s = str(status_val).lower().strip()
     
-    # Palavras-chave indicando Atraso / Pendência / Cobrança
     termos_atrasado = [
         'atrasad', 'pendent', 'cobranç', 'cobranc', 'notific', 'devedor', 
-        'falta', 'devoluç', 'devoluc', 'sem relató', 'sem diploma', 'não entregou', 'nao entregou'
+        'falta', 'devoluç', 'devoluc', 'sem relató', 'sem diploma', 'não entregou', 
+        'nao entregou', 'suspens', 'processo de devolução', 'processo de devolucao'
     ]
     
-    # Palavras-chave indicando Concluído / Em dia
     termos_concluido = [
-        'entregue', 'em dia', 'concluid', 'concluíd', 'finalizad', 'ok', 'deferid', 'regular', 'diploma entregue', 'certificado entregue'
+        'entregue', 'em dia', 'concluid', 'concluíd', 'finalizad', 'ok', 
+        'deferid', 'regular', 'diploma entregue', 'certificado entregue', 
+        'relatórios entregues', 'relatorios entregues', 'relatório final entregue', 'relatorio final entregue'
     ]
     
     for kw in termos_atrasado:
@@ -158,7 +166,7 @@ else:
     st.sidebar.title("Navegação")
     opcao = st.sidebar.radio(
         "Selecione uma opção", 
-        ["Dashboard", "📥 Importar Planilha", "➕ Cadastrar Servidor", "📋 Gerenciar Registros"]
+        ["Dashboard Unificado", "📥 Importar Planilhas", "➕ Cadastrar Servidor", "📋 Gerenciar Registros"]
     )
     
     if st.sidebar.button("Sair / Logout"):
@@ -167,9 +175,9 @@ else:
 
     st.markdown("<div class='main-header'>Gestão de Afastamento para Qualificação</div>", unsafe_allow_html=True)
     
-    # ---------------- DASHBOARD ----------------
-    if opcao == "Dashboard":
-        st.subheader("📊 Painel Geral de Acompanhamento")
+    # ---------------- DASHBOARD UNIFICADO ----------------
+    if opcao == "Dashboard Unificado":
+        st.subheader("📊 Painel Geral de Acompanhamento (Docentes & Técnicos)")
         conn = sqlite3.connect(DB_NAME)
         df = pd.read_sql_query("SELECT * FROM servidores", conn)
         conn.close()
@@ -178,69 +186,120 @@ else:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
                 
-            # Aplicação do algoritmo de categorização flexível
+            # Aplicar categorização inteligente de status
             df['Categoria_Status'] = df['status'].apply(categorizar_status_inteligente)
             
             total_servidores = len(df)
             total_em_dia = len(df[df['Categoria_Status'] == 'Em Dia / Concluído'])
-            total_atrasados = len(df[df['Categoria_Status'] == 'Atrasado / Pendente'])
-            total_outros = len(df[df['Categoria_Status'] == 'Outros / Em Acompanhamento'])
+            df_atrasados = df[df['Categoria_Status'] == 'Atrasado / Pendente']
+            total_atrasados = len(df_atrasados)
             
-            # Exibição das Métricas
+            # Subdivisão de atrasados por categoria de servidor
+            docentes_atrasados = len(df_atrasados[df_atrasados['tipo_servidor'] == 'Docente'])
+            tecnicos_atrasados = len(df_atrasados[df_atrasados['tipo_servidor'] == 'Técnico (PTES)'])
+            
+            # Métricas em Cartões
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Total de Servidores", total_servidores)
             c2.metric("✅ Em Dia / Concluídos", total_em_dia)
-            c3.metric("⚠️ Atrasados / Pendentes", total_atrasados)
-            c4.metric("ℹ️ Outros / Acompanhamento", total_outros)
+            c3.metric("⚠️ Total de Atrasados", total_atrasados)
+            c4.metric("👨‍🏫 Docentes / 👨‍💼 Técnicos Atrasados", f"{docentes_atrasados} / {tecnicos_atrasados}")
             
             st.divider()
             
-            # Filtros e Pesquisa
-            col_f1, col_f2 = st.columns([2, 2])
-            with col_f1:
-                filtro_categoria = st.radio(
-                    "Filtrar Registros por Categoria:",
-                    ["Exibir Todos", "⚠️ Atrasados e Pendentes", "✅ Em Dia e Concluídos", "ℹ️ Outros"],
-                    horizontal=True
-                )
-            with col_f2:
-                busca_texto = st.text_input("🔍 Pesquisar por Nome, Matrícula, Curso ou Status:", placeholder="Ex: Pendente, Devolução, Diploma...")
+            # Abas de Visualização
+            aba1, aba2 = st.tabs(["🚨 RELATÓRIO DE ATRASADOS E PENDENTES", "🌐 VISÃO GERAL DE TODOS OS REGISTROS"])
             
-            # Filtragem dos dados
-            df_exibicao = df.copy()
-            
-            if filtro_categoria == "⚠️ Atrasados e Pendentes":
-                df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Atrasado / Pendente']
-            elif filtro_categoria == "✅ Em Dia e Concluídos":
-                df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Em Dia / Concluído']
-            elif filtro_categoria == "ℹ️ Outros":
-                df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Outros / Em Acompanhamento']
+            with aba1:
+                st.warning(f"Exibindo **{len(df_atrasados)}** servidores com relatórios, diplomas ou processos pendentes/atrasados.")
                 
-            if busca_texto:
-                bt = busca_texto.lower()
-                mask = (
-                    df_exibicao['nome'].astype(str).str.lower().str.contains(bt) |
-                    df_exibicao['matricula'].astype(str).str.lower().str.contains(bt) |
-                    df_exibicao['curso'].astype(str).str.lower().str.contains(bt) |
-                    df_exibicao['nivel'].astype(str).str.lower().str.contains(bt) |
-                    df_exibicao['status'].astype(str).str.lower().str.contains(bt)
+                col_at_1, col_at_2 = st.columns([2, 2])
+                with col_at_1:
+                    filtro_tipo_atraso = st.selectbox("Filtrar por Tipo de Servidor:", ["Todos", "Docente", "Técnico (PTES)"])
+                with col_at_2:
+                    busca_atraso = st.text_input("🔍 Pesquisar em Atrasados:", placeholder="Nome, Matrícula ou Detalhe do Status...")
+                
+                df_atrasos_exibir = df_atrasados.copy()
+                if filtro_tipo_atraso != "Todos":
+                    df_atrasos_exibir = df_atrasos_exibir[df_atrasos_exibir['tipo_servidor'] == filtro_tipo_atraso]
+                    
+                if busca_atraso:
+                    ba = busca_atraso.lower()
+                    mask = (
+                        df_atrasos_exibir['nome'].astype(str).str.lower().str.contains(ba) |
+                        df_atrasos_exibir['matricula'].astype(str).str.lower().str.contains(ba) |
+                        df_atrasos_exibir['curso'].astype(str).str.lower().str.contains(ba) |
+                        df_atrasos_exibir['status'].astype(str).str.lower().str.contains(ba)
+                    )
+                    df_atrasos_exibir = df_atrasos_exibir[mask]
+                
+                st.dataframe(df_atrasos_exibir.drop(columns=['Categoria_Status']), use_container_width=True)
+                
+                # Botão para baixar relatório específico de atrasados
+                csv_atrasados = df_atrasos_exibir.drop(columns=['Categoria_Status']).to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Baixar Relatório de Atrasados em CSV/Excel",
+                    data=csv_atrasados,
+                    file_name="servidores_atrasados_unemat.csv",
+                    mime="text/csv",
+                    type="primary"
                 )
-                df_exibicao = df_exibicao[mask]
+
+            with aba2:
+                col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
+                with col_f1:
+                    filtro_categoria = st.radio(
+                        "Status:",
+                        ["Exibir Todos", "⚠️ Atrasados/Pendentes", "✅ Em Dia/Concluídos"],
+                        horizontal=True
+                    )
+                with col_f2:
+                    filtro_tipo_geral = st.selectbox("Tipo de Servidor:", ["Todos", "Docente", "Técnico (PTES)"], key="f_tipo_geral")
+                with col_f3:
+                    busca_geral = st.text_input("🔍 Pesquisa Geral:", placeholder="Nome, Matrícula, Curso...", key="f_busca_geral")
                 
-            st.write(f"Mostrando **{len(df_exibicao)}** registro(s):")
-            st.dataframe(df_exibicao.drop(columns=['Categoria_Status']), use_container_width=True)
+                df_exibicao = df.copy()
+                
+                if filtro_categoria == "⚠️ Atrasados/Pendentes":
+                    df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Atrasado / Pendente']
+                elif filtro_categoria == "✅ Em Dia/Concluídos":
+                    df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Em Dia / Concluído']
+                    
+                if filtro_tipo_geral != "Todos":
+                    df_exibicao = df_exibicao[df_exibicao['tipo_servidor'] == filtro_tipo_geral]
+                    
+                if busca_geral:
+                    bg = busca_geral.lower()
+                    mask = (
+                        df_exibicao['nome'].astype(str).str.lower().str.contains(bg) |
+                        df_exibicao['matricula'].astype(str).str.lower().str.contains(bg) |
+                        df_exibicao['curso'].astype(str).str.lower().str.contains(bg) |
+                        df_exibicao['status'].astype(str).str.lower().str.contains(bg)
+                    )
+                    df_exibicao = df_exibicao[mask]
+                    
+                st.write(f"Mostrando **{len(df_exibicao)}** registro(s):")
+                st.dataframe(df_exibicao.drop(columns=['Categoria_Status']), use_container_width=True)
             
         else:
-            st.info("Nenhum registro cadastrado no momento. Acesse '📥 Importar Planilha' no menu lateral para enviar seus dados.")
+            st.info("Nenhum registro cadastrado no momento. Acesse '📥 Importar Planilhas' para carregar seus dados de Docentes e Técnicos.")
 
-    # ---------------- IMPORTAR PLANILHA ----------------
-    elif opcao == "📥 Importar Planilha":
-        st.subheader("📥 Importar Dados de Planilha (Excel ou CSV)")
-        st.write("Envie sua planilha para atualizar a base do sistema.")
+    # ---------------- IMPORTAR PLANILHAS ----------------
+    elif opcao == "📥 Importar Planilhas":
+        st.subheader("📥 Importação e Unificação de Planilhas (Docentes & Técnicos)")
+        st.write("Você pode importar a planilha de Docentes e depois a de Técnicos. O sistema unificará os dados automaticamente.")
         
-        substituir_tudo = st.checkbox("⚠️ Substituir todos os registros existentes no banco de dados antes de importar", value=False)
-        
-        uploaded_file = st.file_uploader("Selecione o arquivo Excel (.xlsx) ou CSV (.csv)", type=["xlsx", "xls", "csv"])
+        col_imp_1, col_imp_2 = st.columns([1, 1])
+        with col_imp_1:
+            tipo_planilha = st.selectbox("Selecione o Tipo dos Servidores desta Planilha:", ["Docente", "Técnico (PTES)"])
+        with col_imp_2:
+            modo_importacao = st.radio(
+                "Ação de Importação:",
+                ["➕ Adicionar e Unificar com a base existente", "⚠️ Limpar base e importar apenas esta planilha"],
+                index=0
+            )
+            
+        uploaded_file = st.file_uploader("Selecione a planilha Excel (.xlsx) ou CSV (.csv)", type=["xlsx", "xls", "csv"])
         
         if uploaded_file is not None:
             try:
@@ -249,62 +308,66 @@ else:
                 else:
                     df_import = pd.read_excel(uploaded_file)
                 
-                st.write("Prévia dos dados encontrados na planilha:")
-                st.dataframe(df_import.head(10), use_container_width=True)
+                st.write("Prévia dos dados da planilha selecionada:")
+                st.dataframe(df_import.head(8), use_container_width=True)
                 
-                st.info("Selecione qual coluna da sua planilha corresponde a cada campo do sistema:")
-                
+                st.info("Confirme a correspondência das colunas:")
                 colunas_disponiveis = list(df_import.columns)
-                col_mat = st.selectbox("Coluna para Matrícula", colunas_disponiveis, index=0)
-                col_nom = st.selectbox("Coluna para Nome Completo", colunas_disponiveis, index=min(1, len(colunas_disponiveis)-1))
-                col_cur = st.selectbox("Coluna para Curso / Programa", colunas_disponiveis, index=min(2, len(colunas_disponiveis)-1))
-                col_niv = st.selectbox("Coluna para Nível (Mestrado/Doutorado...)", colunas_disponiveis, index=min(3, len(colunas_disponiveis)-1))
-                col_ini = st.selectbox("Coluna para Data Início", colunas_disponiveis, index=min(4, len(colunas_disponiveis)-1))
-                col_fim = st.selectbox("Coluna para Previsão Término", colunas_disponiveis, index=min(5, len(colunas_disponiveis)-1))
-                col_sta = st.selectbox("Coluna para Status / Observação", colunas_disponiveis, index=min(6, len(colunas_disponiveis)-1))
                 
-                if st.button("Confirmar e Importar Registros", type="primary"):
+                c_mat = st.selectbox("Matrícula", colunas_disponiveis, index=0)
+                c_nom = st.selectbox("Nome Completo", colunas_disponiveis, index=min(1, len(colunas_disponiveis)-1))
+                c_cur = st.selectbox("Curso / Programa", colunas_disponiveis, index=min(2, len(colunas_disponiveis)-1))
+                c_niv = st.selectbox("Nível (Mestrado/Doutorado...)", colunas_disponiveis, index=min(3, len(colunas_disponiveis)-1))
+                c_ini = st.selectbox("Data de Início", colunas_disponiveis, index=min(4, len(colunas_disponiveis)-1))
+                c_fim = st.selectbox("Previsão de Término", colunas_disponiveis, index=min(5, len(colunas_disponiveis)-1))
+                c_sta = st.selectbox("Status / Observação", colunas_disponiveis, index=min(6, len(colunas_disponiveis)-1))
+                
+                if st.button("Confirmar Importação e Unificar Registros", type="primary"):
                     conn = sqlite3.connect(DB_NAME)
                     cursor = conn.cursor()
                     
-                    if substituir_tudo:
+                    if "Limpar base" in modo_importacao:
                         cursor.execute("DELETE FROM servidores")
-                    
+                        
                     sucesso = 0
-                    
                     for _, row in df_import.iterrows():
                         cursor.execute("""
-                            INSERT INTO servidores (matricula, nome, curso, nivel, data_inicio, data_previsao_termino, status)
-                            VALUES (?, ?, ?, ?, ?, ?, ?)
+                            INSERT INTO servidores (matricula, nome, tipo_servidor, curso, nivel, data_inicio, data_previsao_termino, status)
+                            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
-                            str(row[col_mat]),
-                            str(row[col_nom]),
-                            str(row[col_cur]),
-                            str(row[col_niv]),
-                            str(row[col_ini]),
-                            str(row[col_fim]),
-                            str(row[col_sta])
+                            str(row[c_mat]),
+                            str(row[c_nom]),
+                            tipo_planilha,
+                            str(row[c_cur]),
+                            str(row[c_niv]),
+                            str(row[c_ini]),
+                            str(row[c_fim]),
+                            str(row[c_sta])
                         ))
                         sucesso += 1
-                    
+                        
                     conn.commit()
                     conn.close()
                     
-                    st.success(f"Importação concluída com sucesso! {sucesso} registro(s) inseridos.")
+                    st.success(f"Sucesso! {sucesso} registros do tipo **{tipo_planilha}** foram unificados ao banco de dados.")
             except Exception as e:
-                st.error(f"Erro ao processar arquivo: {e}")
+                st.error(f"Erro ao importar planilha: {e}")
 
     # ---------------- CADASTRAR NOVO SERVIDOR ----------------
     elif opcao == "➕ Cadastrar Servidor":
         st.subheader("➕ Cadastrar Novo Servidor em Afastamento")
         with st.form("cadastrar_form"):
-            matricula = st.text_input("Matrícula")
-            nome = st.text_input("Nome Completo")
-            curso = st.text_input("Curso / Programa")
-            nivel = st.selectbox("Nível", ["Mestrado", "Doutorado", "Pós-Doutorado", "Especialização"])
-            data_inicio = st.date_input("Data de Início", date.today())
-            data_previsao = st.date_input("Previsão de Término", date.today())
-            status = st.selectbox("Status Inicial", ["Em dia", "Atrasado Relatório", "Atrasado Diploma", "Prorrogado"])
+            col_cad_1, col_cad_2 = st.columns(2)
+            with col_cad_1:
+                matricula = st.text_input("Matrícula")
+                nome = st.text_input("Nome Completo")
+                tipo_servidor = st.selectbox("Tipo de Servidor", ["Docente", "Técnico (PTES)"])
+                curso = st.text_input("Curso / Programa")
+            with col_cad_2:
+                nivel = st.selectbox("Nível", ["Mestrado", "Doutorado", "Pós-Doutorado", "Especialização"])
+                data_inicio = st.date_input("Data de Início", date.today())
+                data_previsao = st.date_input("Previsão de Término", date.today())
+                status = st.selectbox("Status Inicial", ["Em dia", "Atrasado Relatório", "Atrasado Diploma", "Prorrogado"])
             
             btn_salvar = st.form_submit_button("Salvar Cadastro", use_container_width=True)
             
@@ -313,18 +376,18 @@ else:
                     conn = sqlite3.connect(DB_NAME)
                     cursor = conn.cursor()
                     cursor.execute("""
-                        INSERT INTO servidores (matricula, nome, curso, nivel, data_inicio, data_previsao_termino, status)
-                        VALUES (?, ?, ?, ?, ?, ?, ?)
-                    """, (matricula, nome, curso, nivel, str(data_inicio), str(data_previsao), status))
+                        INSERT INTO servidores (matricula, nome, tipo_servidor, curso, nivel, data_inicio, data_previsao_termino, status)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    """, (matricula, nome, tipo_servidor, curso, nivel, str(data_inicio), str(data_previsao), status))
                     conn.commit()
                     conn.close()
-                    st.success("Servidor cadastrado com sucesso!")
+                    st.success(f"Servidor **{nome}** ({tipo_servidor}) cadastrado com sucesso!")
                 else:
                     st.warning("Por favor, preencha a matrícula e o nome.")
 
     # ---------------- GERENCIAR REGISTROS ----------------
     elif opcao == "📋 Gerenciar Registros":
-        st.subheader("📋 Registros Cadastrados")
+        st.subheader("📋 Gerenciamento Unificado de Registros")
         conn = sqlite3.connect(DB_NAME)
         df = pd.read_sql_query("SELECT * FROM servidores", conn)
         conn.close()
@@ -334,12 +397,11 @@ else:
                 df = df.drop(columns=['id'])
             st.dataframe(df, use_container_width=True)
             
-            # Exportação de dados
             csv_data = df.to_csv(index=False).encode('utf-8')
             st.download_button(
-                label="📥 Baixar Registros em CSV",
+                label="📥 Baixar Base de Dados Completa (CSV)",
                 data=csv_data,
-                file_name="servidores_afastados_unemat.csv",
+                file_name="base_unificada_qualificacao_unemat.csv",
                 mime="text/csv"
             )
         else:
