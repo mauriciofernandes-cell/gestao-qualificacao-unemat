@@ -27,25 +27,10 @@ st.markdown("""
         text-align: center; 
         margin-bottom: 25px; 
     }
-    .status-em-dia { 
-        background-color: #28a745; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; 
-    }
-    .status-atrasado-relatorio { 
-        background-color: #dc3545; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; 
-    }
-    .status-atrasado-diploma { 
-        background-color: #fd7e14; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; 
-    }
-    .status-prorrogado { 
-        background-color: #17a2b8; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; 
-    }
-    .status-cobranca { 
-        background-color: #6c757d; color: white; padding: 4px 8px; border-radius: 4px; font-weight: bold; 
-    }
 </style>
 """, unsafe_allow_html=True)
 
-# 3. Inicialização e Correção de Esquema no Banco de Dados SQLite
+# 3. Inicialização do Banco de Dados SQLite
 DB_NAME = "qualificacao_unemat.db"
 
 def init_db():
@@ -60,39 +45,32 @@ def init_db():
             nome TEXT,
             curso TEXT,
             nivel TEXT,
-            data_inicio DATE,
-            data_previsao_termino DATE,
+            data_inicio TEXT,
+            data_previsao_termino TEXT,
             status TEXT
         )
     ''')
     
-    # Tabela de usuários com tratamento de erro de compatibilidade
-    try:
-        cursor.execute('''
-            CREATE TABLE IF NOT EXISTS usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario TEXT UNIQUE,
-                senha TEXT
-            )
-        ''')
-        cursor.execute("INSERT OR IGNORE INTO usuarios (usuario, senha) VALUES ('admin', '1234')")
-    except sqlite3.OperationalError:
-        cursor.execute("DROP TABLE IF EXISTS usuarios")
-        cursor.execute('''
-            CREATE TABLE usuarios (
-                id INTEGER PRIMARY KEY AUTOINCREMENT,
-                usuario TEXT UNIQUE,
-                senha TEXT
-            )
-        ''')
-        cursor.execute("INSERT INTO usuarios (usuario, senha) VALUES ('admin', '1234')")
+    # Tabela de usuários
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS usuarios (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            usuario TEXT UNIQUE,
+            senha TEXT
+        )
+    ''')
+    
+    # Cadastra as credenciais permitidas
+    cursor.execute("INSERT OR REPLACE INTO usuarios (id, usuario, senha) VALUES (1, 'admin', '1234')")
+    cursor.execute("INSERT OR REPLACE INTO usuarios (id, usuario, senha) VALUES (2, 'SDP - Controle de Qualificação.', 'Supersdp@')")
+    cursor.execute("INSERT OR REPLACE INTO usuarios (id, usuario, senha) VALUES (3, 'sdp', 'Supersdp@')")
         
     conn.commit()
     conn.close()
 
 init_db()
 
-# 4. Estado de sessão para controle de autenticação
+# 4. Controle de sessão de login
 if 'logged_in' not in st.session_state:
     st.session_state['logged_in'] = False
 
@@ -132,7 +110,10 @@ if not st.session_state['logged_in']:
 # 7. Painel Principal (Após Login)
 else:
     st.sidebar.title("Navegação")
-    opcao = st.sidebar.radio("Selecione uma opção", ["Dashboard", "Cadastrar Servidor", "Gerenciar Registros"])
+    opcao = st.sidebar.radio(
+        "Selecione uma opção", 
+        ["Dashboard", "📥 Importar Planilha", "➕ Cadastrar Servidor", "📋 Gerenciar Registros"]
+    )
     
     if st.sidebar.button("Sair / Logout"):
         st.session_state['logged_in'] = False
@@ -140,24 +121,88 @@ else:
 
     st.markdown("<div class='main-header'>Gestão de Afastamento para Qualificação</div>", unsafe_allow_html=True)
     
+    # DASHBOARD
     if opcao == "Dashboard":
-        st.subheader("Painel Geral de Acompanhamento")
+        st.subheader("📊 Painel Geral de Acompanhamento")
         conn = sqlite3.connect(DB_NAME)
-        df = pd.read_sql_query("SELECT * FROM servidores", conn)
+        df = pd.read_sql_query("SELECT matricula, nome, curso, nivel, data_inicio, data_previsao_termino, status FROM servidores", conn)
         conn.close()
         
         if not df.empty:
             c1, c2, c3 = st.columns(3)
             c1.metric("Total de Servidores", len(df))
-            c2.metric("Em Dia", len(df[df['status'] == 'Em dia']))
-            c3.metric("Atrasados", len(df[df['status'].str.contains('Atrasado', na=False)]))
+            c2.metric("Em Dia", len(df[df['status'].str.lower() == 'em dia']))
+            c3.metric("Atrasados / Atenção", len(df[df['status'].str.contains('Atrasado|Cobrança', case=False, na=False)]))
             
             st.dataframe(df, use_container_width=True)
         else:
-            st.info("Nenhum registro cadastrado no momento.")
+            st.info("Nenhum registro cadastrado no momento. Use a opção '📥 Importar Planilha' no menu para carregar seus dados existentes.")
 
-    elif opcao == "Cadastrar Servidor":
-        st.subheader("Cadastrar Novo Servidor em Afastamento")
+    # IMPORTAR PLANILHA
+    elif opcao == "📥 Importar Planilha":
+        st.subheader("📥 Importar Dados de Planilha (Excel ou CSV)")
+        st.write("Faça o upload da sua planilha para carregar todos os registros anteriores de uma só vez.")
+        
+        uploaded_file = st.file_uploader("Selecione o arquivo Excel (.xlsx) ou CSV (.csv)", type=["xlsx", "xls", "csv"])
+        
+        if uploaded_file is not None:
+            try:
+                if uploaded_file.name.endswith('.csv'):
+                    df_import = pd.read_csv(uploaded_file)
+                else:
+                    df_import = pd.read_excel(uploaded_file)
+                
+                st.write("Preview dos dados encontrados na planilha:")
+                st.dataframe(df_import.head(10), use_container_width=True)
+                
+                st.info("Certifique-se de que sua planilha contenha as colunas correspondentes ou mapeie abaixo:")
+                
+                colunas_disponiveis = list(df_import.columns)
+                col_mat = st.selectbox("Coluna para Matrícula", colunas_disponiveis, index=0)
+                col_nom = st.selectbox("Coluna para Nome Completo", colunas_disponiveis, index=min(1, len(colunas_disponiveis)-1))
+                col_cur = st.selectbox("Coluna para Curso", colunas_disponiveis, index=min(2, len(colunas_disponiveis)-1))
+                col_niv = st.selectbox("Coluna para Nível", colunas_disponiveis, index=min(3, len(colunas_disponiveis)-1))
+                col_ini = st.selectbox("Coluna para Data Início", colunas_disponiveis, index=min(4, len(colunas_disponiveis)-1))
+                col_fim = st.selectbox("Coluna para Previsão Término", colunas_disponiveis, index=min(5, len(colunas_disponiveis)-1))
+                col_sta = st.selectbox("Coluna para Status", colunas_disponiveis, index=min(6, len(colunas_disponiveis)-1))
+                
+                if st.button("Confirmar e Importar Registros para o Banco de Dados", type="primary"):
+                    conn = sqlite3.connect(DB_NAME)
+                    cursor = conn.cursor()
+                    
+                    sucesso = 0
+                    duplicados = 0
+                    
+                    for _, row in df_import.iterrows():
+                        try:
+                            cursor.execute("""
+                                INSERT INTO servidores (matricula, nome, curso, nivel, data_inicio, data_previsao_termino, status)
+                                VALUES (?, ?, ?, ?, ?, ?, ?)
+                            """, (
+                                str(row[col_mat]),
+                                str(row[col_nom]),
+                                str(row[col_cur]),
+                                str(row[col_niv]),
+                                str(row[col_ini]),
+                                str(row[col_fim]),
+                                str(row[col_sta])
+                            ))
+                            sucesso += 1
+                        except sqlite3.IntegrityError:
+                            duplicados += 1
+                    
+                    conn.commit()
+                    conn.close()
+                    
+                    st.success(f"Importação concluída! {sucesso} registros inseridos com sucesso.")
+                    if duplicados > 0:
+                        st.warning(f"{duplicados} registros foram ignorados pois a matrícula já existia no sistema.")
+            except Exception as e:
+                st.error(f"Erro ao ler a planilha: {e}")
+
+    # CADASTRAR NOVO SERVIDOR
+    elif opcao == "➕ Cadastrar Servidor":
+        st.subheader("➕ Cadastrar Novo Servidor em Afastamento")
         with st.form("cadastrar_form"):
             matricula = st.text_input("Matrícula")
             nome = st.text_input("Nome Completo")
@@ -167,7 +212,7 @@ else:
             data_previsao = st.date_input("Previsão de Término", date.today())
             status = st.selectbox("Status Inicial", ["Em dia", "Atrasado Relatório", "Atrasado Diploma", "Prorrogado"])
             
-            btn_salvar = st.form_submit_button("Salvar Cadastro")
+            btn_salvar = st.form_submit_button("Salvar Cadastro", use_container_width=True)
             
             if btn_salvar:
                 if matricula and nome:
@@ -177,21 +222,32 @@ else:
                         cursor.execute("""
                             INSERT INTO servidores (matricula, nome, curso, nivel, data_inicio, data_previsao_termino, status)
                             VALUES (?, ?, ?, ?, ?, ?, ?)
-                        """, (matricula, nome, curso, nivel, data_inicio, data_previsao, status))
+                        """, (matricula, nome, curso, nivel, str(data_inicio), str(data_previsao), status))
                         conn.commit()
                         conn.close()
                         st.success("Servidor cadastrado com sucesso!")
                     except sqlite3.IntegrityError:
-                        st.error("Já existe um servidor com essa matrícula.")
+                        st.error("Já existe um servidor cadastrado com essa matrícula.")
                 else:
                     st.warning("Por favor, preencha a matrícula e o nome.")
 
-    elif opcao == "Gerenciar Registros":
-        st.subheader("Registros Cadastrados")
+    # GERENCIAR REGISTROS
+    elif opcao == "📋 Gerenciar Registros":
+        st.subheader("📋 Registros Cadastrados")
         conn = sqlite3.connect(DB_NAME)
-        df = pd.read_sql_query("SELECT * FROM servidores", conn)
+        df = pd.read_sql_query("SELECT id, matricula, nome, curso, nivel, data_inicio, data_previsao_termino, status FROM servidores", conn)
         conn.close()
+        
         if not df.empty:
             st.dataframe(df, use_container_width=True)
+            
+            # Botão de Exportação
+            csv_data = df.to_csv(index=False).encode('utf-8')
+            st.download_button(
+                label="📥 Baixar Registros em CSV",
+                data=csv_data,
+                file_name="servidores_afastados_unemat.csv",
+                mime="text/csv"
+            )
         else:
-            st.info("Nenhum registro encontrado.")
+            st.info("Nenhum registro encontrado no sistema.")
