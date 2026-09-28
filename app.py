@@ -29,7 +29,7 @@ st.markdown("""
     }
     .stMetric {
         background-color: #f8f9fa;
-        padding: 15px;
+        padding: 12px;
         border-radius: 8px;
         border-left: 5px solid #003366;
     }
@@ -43,7 +43,6 @@ def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
     
-    # Tabela de servidores unificada
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS servidores (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -58,13 +57,11 @@ def init_db():
         )
     ''')
     
-    # Atualização de coluna tipo_servidor caso a tabela tenha sido criada em versão anterior
     cursor.execute("PRAGMA table_info(servidores)")
     colunas_existentes = [col[1] for col in cursor.fetchall()]
     if 'tipo_servidor' not in colunas_existentes:
         cursor.execute("ALTER TABLE servidores ADD COLUMN tipo_servidor TEXT DEFAULT 'Docente'")
     
-    # Tabela de usuários
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS usuarios (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -73,7 +70,6 @@ def init_db():
         )
     ''')
     
-    # Usuários permitidos
     usuarios_padrao = [
         (1, 'controle', 'Supersdp@'),
         (2, 'sdp - controle', 'Supersdp@'),
@@ -88,11 +84,14 @@ def init_db():
 
 init_db()
 
-# Função de Inteligência para categorizar o Status dos Relatórios e Diplomas
+# Função de Inteligência Reajustada
 def categorizar_status_inteligente(status_val):
     s = str(status_val).lower().strip()
     
-    # 1. Pessoas que já estão em desconto em folha ou quitadas (NÃO são mais devedores pendentes)
+    if status_val is None or pd.isna(status_val) or s in ['nan', 'none', '', 'null']:
+        return 'Outros / Em Acompanhamento'
+    
+    # 1. Pessoas que já estão em desconto em folha ou quitadas
     termos_desconto = [
         'já está descontando', 'ja esta descontando', 'está descontando', 'esta descontando',
         'descontando', 'descontado', 'quitado', 'ressarcido', 'pago'
@@ -101,21 +100,23 @@ def categorizar_status_inteligente(status_val):
         if kw in s:
             return 'Em Desconto / Quitado'
 
-    # 2. Servidores com relatórios/diplomas atrasados ou cobrança/processo pendente
+    # 2. Atrasados, devedores ou aguardando comissão
     termos_atrasado = [
         'atrasad', 'pendent', 'cobranç', 'cobranc', 'notific', 'devedor', 
         'falta', 'devoluç', 'devoluc', 'sem relató', 'sem diploma', 'não entregou', 
-        'nao entregou', 'suspens', 'processo de devolução', 'processo de devolucao'
+        'nao entregou', 'suspens', 'processo de devolução', 'processo de devolucao',
+        'aguardando comissão', 'aguardando comissao', 'comiss'
     ]
     for kw in termos_atrasado:
         if kw in s:
             return 'Atrasado / Pendente'
             
-    # 3. Servidores regulares / em dia
+    # 3. Regulares, concluídos ou em andamento
     termos_concluido = [
         'entregue', 'em dia', 'concluid', 'concluíd', 'finalizad', 'ok', 
         'deferid', 'regular', 'diploma entregue', 'certificado entregue', 
-        'relatórios entregues', 'relatorios entregues', 'relatório final entregue', 'relatorio final entregue'
+        'relatórios entregues', 'relatorios entregues', 'relatório final entregue', 
+        'relatorio final entregue', 'em andamento', 'andamento', 'cursando', 'em curso'
     ]
     for kw in termos_concluido:
         if kw in s:
@@ -195,6 +196,9 @@ else:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
                 
+            # Filtro para remover linhas de cabeçalho importadas por engano
+            df = df[~df['nome'].astype(str).str.lower().strip().isin(['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', ''])]
+            
             # Aplicar categorização inteligente de status
             df['Categoria_Status'] = df['status'].apply(categorizar_status_inteligente)
             
@@ -204,29 +208,29 @@ else:
             total_atrasados = len(df_atrasados)
             df_descontando = df[df['Categoria_Status'] == 'Em Desconto / Quitado']
             total_descontando = len(df_descontando)
+            df_outros = df[df['Categoria_Status'] == 'Outros / Em Acompanhamento']
+            total_outros = len(df_outros)
             
-            # Subdivisão de atrasados por categoria de servidor
-            docentes_atrasados = len(df_atrasados[df_atrasados['tipo_servidor'] == 'Docente'])
-            tecnicos_atrasados = len(df_atrasados[df_atrasados['tipo_servidor'] == 'Técnico (PTES)'])
-            
-            # Métricas em Cartões
-            c1, c2, c3, c4 = st.columns(4)
-            c1.metric("Total de Servidores", total_servidores)
-            c2.metric("✅ Em Dia / Concluídos", total_em_dia)
-            c3.metric("⚠️ Total de Atrasados / Devedores", total_atrasados)
-            c4.metric("💳 Já em Desconto / Quitados", total_descontando)
+            # Métricas em 5 Cartões
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("Total Registros", total_servidores)
+            c2.metric("✅ Em Dia / Em Andam.", total_em_dia)
+            c3.metric("⚠️ Atrasados / Comiss.", total_atrasados)
+            c4.metric("💳 Em Desconto", total_descontando)
+            c5.metric("ℹ️ Outros / Acomp.", total_outros)
             
             st.divider()
             
             # Abas de Visualização
-            aba1, aba2, aba3 = st.tabs([
+            aba1, aba2, aba3, aba4 = st.tabs([
                 "🚨 RELATÓRIO DE ATRASADOS E PENDENTES", 
                 "💳 JÁ EM DESCONTO / QUITADOS", 
+                "ℹ️ OUTROS / EM ACOMPANHAMENTO",
                 "🌐 VISÃO GERAL DE TODOS OS REGISTROS"
             ])
             
             with aba1:
-                st.warning(f"Exibindo **{len(df_atrasados)}** servidores com relatórios, diplomas ou processos pendentes/atrasados.")
+                st.warning(f"Exibindo **{len(df_atrasados)}** servidores com relatórios, diplomas ou processos pendentes/atrasados (incluindo aguardando comissão).")
                 
                 col_at_1, col_at_2 = st.columns([2, 2])
                 with col_at_1:
@@ -293,11 +297,15 @@ else:
                 )
 
             with aba3:
+                st.info(f"Exibindo **{len(df_outros)}** registros com status em acompanhamento, em branco ou de outras categorias.")
+                st.dataframe(df_outros.drop(columns=['Categoria_Status']), use_container_width=True)
+
+            with aba4:
                 col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
                 with col_f1:
                     filtro_categoria = st.radio(
                         "Status:",
-                        ["Exibir Todos", "⚠️ Atrasados/Pendentes", "💳 Já em Desconto/Quitados", "✅ Em Dia/Concluídos"],
+                        ["Exibir Todos", "⚠️ Atrasados/Pendentes", "💳 Já em Desconto/Quitados", "✅ Em Dia/Concluídos", "ℹ️ Outros"],
                         horizontal=True
                     )
                 with col_f2:
@@ -313,6 +321,8 @@ else:
                     df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Em Desconto / Quitado']
                 elif filtro_categoria == "✅ Em Dia/Concluídos":
                     df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Em Dia / Concluído']
+                elif filtro_categoria == "ℹ️ Outros":
+                    df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Outros / Em Acompanhamento']
                     
                 if filtro_tipo_geral != "Todos":
                     df_exibicao = df_exibicao[df_exibicao['tipo_servidor'] == filtro_tipo_geral]
@@ -380,12 +390,16 @@ else:
                         
                     sucesso = 0
                     for _, row in df_import.iterrows():
+                        nome_val = str(row[c_nom]).strip()
+                        if nome_val.lower() in ['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', '']:
+                            continue
+                            
                         cursor.execute("""
                             INSERT INTO servidores (matricula, nome, tipo_servidor, curso, nivel, data_inicio, data_previsao_termino, status)
                             VALUES (?, ?, ?, ?, ?, ?, ?, ?)
                         """, (
                             str(row[c_mat]),
-                            str(row[c_nom]),
+                            nome_val,
                             tipo_planilha,
                             str(row[c_cur]),
                             str(row[c_niv]),
@@ -444,6 +458,7 @@ else:
         if not df.empty:
             if 'id' in df.columns:
                 df = df.drop(columns=['id'])
+            df = df[~df['nome'].astype(str).str.lower().strip().isin(['nome', 'nome completo', 'servidor', 'servidores', 'nan', 'none', ''])]
             st.dataframe(df, use_container_width=True)
             
             csv_data = df.to_csv(index=False).encode('utf-8')
