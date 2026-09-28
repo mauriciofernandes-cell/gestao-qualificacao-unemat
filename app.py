@@ -92,22 +92,31 @@ init_db()
 def categorizar_status_inteligente(status_val):
     s = str(status_val).lower().strip()
     
+    # 1. Pessoas que já estão em desconto em folha ou quitadas (NÃO são mais devedores pendentes)
+    termos_desconto = [
+        'já está descontando', 'ja esta descontando', 'está descontando', 'esta descontando',
+        'descontando', 'descontado', 'quitado', 'ressarcido', 'pago'
+    ]
+    for kw in termos_desconto:
+        if kw in s:
+            return 'Em Desconto / Quitado'
+
+    # 2. Servidores com relatórios/diplomas atrasados ou cobrança/processo pendente
     termos_atrasado = [
         'atrasad', 'pendent', 'cobranç', 'cobranc', 'notific', 'devedor', 
         'falta', 'devoluç', 'devoluc', 'sem relató', 'sem diploma', 'não entregou', 
         'nao entregou', 'suspens', 'processo de devolução', 'processo de devolucao'
     ]
-    
+    for kw in termos_atrasado:
+        if kw in s:
+            return 'Atrasado / Pendente'
+            
+    # 3. Servidores regulares / em dia
     termos_concluido = [
         'entregue', 'em dia', 'concluid', 'concluíd', 'finalizad', 'ok', 
         'deferid', 'regular', 'diploma entregue', 'certificado entregue', 
         'relatórios entregues', 'relatorios entregues', 'relatório final entregue', 'relatorio final entregue'
     ]
-    
-    for kw in termos_atrasado:
-        if kw in s:
-            return 'Atrasado / Pendente'
-            
     for kw in termos_concluido:
         if kw in s:
             return 'Em Dia / Concluído'
@@ -193,6 +202,8 @@ else:
             total_em_dia = len(df[df['Categoria_Status'] == 'Em Dia / Concluído'])
             df_atrasados = df[df['Categoria_Status'] == 'Atrasado / Pendente']
             total_atrasados = len(df_atrasados)
+            df_descontando = df[df['Categoria_Status'] == 'Em Desconto / Quitado']
+            total_descontando = len(df_descontando)
             
             # Subdivisão de atrasados por categoria de servidor
             docentes_atrasados = len(df_atrasados[df_atrasados['tipo_servidor'] == 'Docente'])
@@ -202,22 +213,26 @@ else:
             c1, c2, c3, c4 = st.columns(4)
             c1.metric("Total de Servidores", total_servidores)
             c2.metric("✅ Em Dia / Concluídos", total_em_dia)
-            c3.metric("⚠️ Total de Atrasados", total_atrasados)
-            c4.metric("👨‍🏫 Docentes / 👨‍💼 Técnicos Atrasados", f"{docentes_atrasados} / {tecnicos_atrasados}")
+            c3.metric("⚠️ Total de Atrasados / Devedores", total_atrasados)
+            c4.metric("💳 Já em Desconto / Quitados", total_descontando)
             
             st.divider()
             
             # Abas de Visualização
-            aba1, aba2 = st.tabs(["🚨 RELATÓRIO DE ATRASADOS E PENDENTES", "🌐 VISÃO GERAL DE TODOS OS REGISTROS"])
+            aba1, aba2, aba3 = st.tabs([
+                "🚨 RELATÓRIO DE ATRASADOS E PENDENTES", 
+                "💳 JÁ EM DESCONTO / QUITADOS", 
+                "🌐 VISÃO GERAL DE TODOS OS REGISTROS"
+            ])
             
             with aba1:
                 st.warning(f"Exibindo **{len(df_atrasados)}** servidores com relatórios, diplomas ou processos pendentes/atrasados.")
                 
                 col_at_1, col_at_2 = st.columns([2, 2])
                 with col_at_1:
-                    filtro_tipo_atraso = st.selectbox("Filtrar por Tipo de Servidor:", ["Todos", "Docente", "Técnico (PTES)"])
+                    filtro_tipo_atraso = st.selectbox("Filtrar por Tipo de Servidor:", ["Todos", "Docente", "Técnico (PTES)"], key="f_tipo_atr")
                 with col_at_2:
-                    busca_atraso = st.text_input("🔍 Pesquisar em Atrasados:", placeholder="Nome, Matrícula ou Detalhe do Status...")
+                    busca_atraso = st.text_input("🔍 Pesquisar em Atrasados:", placeholder="Nome, Matrícula ou Detalhe do Status...", key="b_atr")
                 
                 df_atrasos_exibir = df_atrasados.copy()
                 if filtro_tipo_atraso != "Todos":
@@ -235,7 +250,6 @@ else:
                 
                 st.dataframe(df_atrasos_exibir.drop(columns=['Categoria_Status']), use_container_width=True)
                 
-                # Botão para baixar relatório específico de atrasados
                 csv_atrasados = df_atrasos_exibir.drop(columns=['Categoria_Status']).to_csv(index=False).encode('utf-8')
                 st.download_button(
                     label="📥 Baixar Relatório de Atrasados em CSV/Excel",
@@ -246,11 +260,44 @@ else:
                 )
 
             with aba2:
+                st.info(f"Exibindo **{len(df_descontando)}** servidores em Processo de Devolução que **já estão em Desconto em Folha ou Quitados**.")
+                
+                col_desc_1, col_desc_2 = st.columns([2, 2])
+                with col_desc_1:
+                    filtro_tipo_desc = st.selectbox("Filtrar por Tipo de Servidor:", ["Todos", "Docente", "Técnico (PTES)"], key="f_tipo_desc")
+                with col_desc_2:
+                    busca_desc = st.text_input("🔍 Pesquisar em Desconto / Quitados:", placeholder="Nome, Matrícula ou Detalhe do Status...", key="b_desc")
+                
+                df_desc_exibir = df_descontando.copy()
+                if filtro_tipo_desc != "Todos":
+                    df_desc_exibir = df_desc_exibir[df_desc_exibir['tipo_servidor'] == filtro_tipo_desc]
+                    
+                if busca_desc:
+                    bd = busca_desc.lower()
+                    mask = (
+                        df_desc_exibir['nome'].astype(str).str.lower().str.contains(bd) |
+                        df_desc_exibir['matricula'].astype(str).str.lower().str.contains(bd) |
+                        df_desc_exibir['curso'].astype(str).str.lower().str.contains(bd) |
+                        df_desc_exibir['status'].astype(str).str.lower().str.contains(bd)
+                    )
+                    df_desc_exibir = df_desc_exibir[mask]
+                
+                st.dataframe(df_desc_exibir.drop(columns=['Categoria_Status']), use_container_width=True)
+                
+                csv_desc = df_desc_exibir.drop(columns=['Categoria_Status']).to_csv(index=False).encode('utf-8')
+                st.download_button(
+                    label="📥 Baixar Relatório de Servidores em Desconto / Quitados",
+                    data=csv_desc,
+                    file_name="servidores_em_desconto_unemat.csv",
+                    mime="text/csv"
+                )
+
+            with aba3:
                 col_f1, col_f2, col_f3 = st.columns([2, 2, 2])
                 with col_f1:
                     filtro_categoria = st.radio(
                         "Status:",
-                        ["Exibir Todos", "⚠️ Atrasados/Pendentes", "✅ Em Dia/Concluídos"],
+                        ["Exibir Todos", "⚠️ Atrasados/Pendentes", "💳 Já em Desconto/Quitados", "✅ Em Dia/Concluídos"],
                         horizontal=True
                     )
                 with col_f2:
@@ -262,6 +309,8 @@ else:
                 
                 if filtro_categoria == "⚠️ Atrasados/Pendentes":
                     df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Atrasado / Pendente']
+                elif filtro_categoria == "💳 Já em Desconto/Quitados":
+                    df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Em Desconto / Quitado']
                 elif filtro_categoria == "✅ Em Dia/Concluídos":
                     df_exibicao = df_exibicao[df_exibicao['Categoria_Status'] == 'Em Dia / Concluído']
                     
